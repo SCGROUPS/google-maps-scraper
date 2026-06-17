@@ -14,6 +14,7 @@ import (
 	"github.com/gosom/google-maps-scraper/grid"
 	"github.com/gosom/google-maps-scraper/leadsdb"
 	"github.com/gosom/google-maps-scraper/runner"
+	"github.com/gosom/google-maps-scraper/writers/placegraphwriter"
 	"github.com/gosom/google-maps-scraper/tlmt"
 	"github.com/gosom/scrapemate"
 	"github.com/gosom/scrapemate/adapters/writers/csvwriter"
@@ -186,6 +187,12 @@ func (r *fileRunner) setWriters() error {
 		}
 
 		r.writers = append(r.writers, customWriter)
+	case r.cfg.PlacegraphDSN != "":
+		w, err := placegraphwriter.New(context.Background(), r.cfg.PlacegraphDSN)
+		if err != nil {
+			return fmt.Errorf("placegraph writer: %w", err)
+		}
+		r.writers = append(r.writers, w)
 	case r.cfg.LeadsDBAPIKey != "":
 		r.writers = append(r.writers, leadsdb.New(r.cfg.LeadsDBAPIKey))
 	default:
