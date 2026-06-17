@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gosom/google-maps-scraper/gmaps"
+	"github.com/gosom/google-maps-scraper/internal/jsonbsanitize"
+	"github.com/gosom/google-maps-scraper/log"
 	"github.com/gosom/scrapemate"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -22,6 +25,9 @@ type PlacegraphWriter struct {
 	count       atomic.Int64
 	hadError    atomic.Bool
 }
+
+// Compile-time assertion that PlacegraphWriter implements scrapemate.ResultWriter.
+var _ scrapemate.ResultWriter = (*PlacegraphWriter)(nil)
 
 // New connects to PostgreSQL, creates a raw.scrape_runs row, and returns
 // a ready writer. The caller must invoke Run to consume results.
@@ -51,7 +57,7 @@ func New(ctx context.Context, dsn string) (*PlacegraphWriter, error) {
 // the scrape_runs row when the channel closes.
 func (w *PlacegraphWriter) Run(ctx context.Context, in <-chan scrapemate.Result) error {
 	defer w.pool.Close()
-	defer w.finalize(ctx)
+	defer w.finalize()
 
 	for result := range in {
 		entries, err := toEntries(result.Data)
@@ -61,6 +67,7 @@ func (w *PlacegraphWriter) Run(ctx context.Context, in <-chan scrapemate.Result)
 		for _, e := range entries {
 			if err := w.writeOne(ctx, e); err != nil {
 				w.hadError.Store(true)
+				log.Warn("placegraphwriter: write failed", "place_id", e.PlaceID, "error", err)
 			}
 		}
 	}
@@ -71,6 +78,8 @@ func (w *PlacegraphWriter) writeOne(ctx context.Context, e *gmaps.Entry) error {
 	if e.PlaceID == "" {
 		return nil // no stable ID — skip silently
 	}
+
+	jsonbsanitize.StripNULFromEntry(e)
 
 	payload, err := json.Marshal(e)
 	if err != nil {
@@ -96,10 +105,16 @@ func (w *PlacegraphWriter) writeOne(ctx context.Context, e *gmaps.Entry) error {
 	return nil
 }
 
-func (w *PlacegraphWriter) finalize(ctx context.Context) {
+func (w *PlacegraphWriter) finalize() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	status := "success"
 	if w.hadError.Load() {
 		status = "partial"
+	}
+	if w.count.Load() == 0 && w.hadError.Load() {
+		status = "failed"
 	}
 	_, _ = w.pool.Exec(ctx,
 		`UPDATE raw.scrape_runs
