@@ -171,6 +171,11 @@ func ParseConfig() *Config {
 		os.Exit(0)
 	}
 
+	if cfg.PlacegraphDSN != "" && cfg.Dsn != "" {
+		fmt.Fprintln(os.Stderr, "error: --pg-dsn cannot be combined with --dsn (database runner mode does not use the Placegraph writer)")
+		os.Exit(1)
+	}
+
 	if cfg.AwsAccessKey == "" {
 		cfg.AwsAccessKey = os.Getenv("MY_AWS_ACCESS_KEY")
 	}
