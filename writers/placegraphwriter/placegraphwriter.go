@@ -10,8 +10,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gosom/google-maps-scraper/gmaps"
-	"github.com/gosom/google-maps-scraper/internal/jsonbsanitize"
-	"github.com/gosom/google-maps-scraper/log"
 	"github.com/gosom/scrapemate"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -25,9 +23,6 @@ type PlacegraphWriter struct {
 	count       atomic.Int64
 	hadError    atomic.Bool
 }
-
-// Compile-time assertion that PlacegraphWriter implements scrapemate.ResultWriter.
-var _ scrapemate.ResultWriter = (*PlacegraphWriter)(nil)
 
 // New connects to PostgreSQL, creates a raw.scrape_runs row, and returns
 // a ready writer. The caller must invoke Run to consume results.
@@ -57,7 +52,7 @@ func New(ctx context.Context, dsn string) (*PlacegraphWriter, error) {
 // the scrape_runs row when the channel closes.
 func (w *PlacegraphWriter) Run(ctx context.Context, in <-chan scrapemate.Result) error {
 	defer w.pool.Close()
-	defer w.finalize()
+	defer w.finalize(ctx)
 
 	for result := range in {
 		entries, err := toEntries(result.Data)
@@ -67,7 +62,6 @@ func (w *PlacegraphWriter) Run(ctx context.Context, in <-chan scrapemate.Result)
 		for _, e := range entries {
 			if err := w.writeOne(ctx, e); err != nil {
 				w.hadError.Store(true)
-				log.Warn("placegraphwriter: write failed", "place_id", e.PlaceID, "error", err)
 			}
 		}
 	}
@@ -79,8 +73,6 @@ func (w *PlacegraphWriter) writeOne(ctx context.Context, e *gmaps.Entry) error {
 		return nil // no stable ID — skip silently
 	}
 
-	jsonbsanitize.StripNULFromEntry(e)
-
 	payload, err := json.Marshal(e)
 	if err != nil {
 		return fmt.Errorf("marshal entry %s: %w", e.PlaceID, err)
@@ -89,7 +81,16 @@ func (w *PlacegraphWriter) writeOne(ctx context.Context, e *gmaps.Entry) error {
 	sum := md5.Sum(payload)
 	hash := fmt.Sprintf("%x", sum)
 
-	tag, err := w.pool.Exec(ctx,
+	// scrapemate cancels the inbound ctx as its shutdown signal while the
+	// writer may still be draining buffered results. Using it directly makes
+	// the final insert(s) fail client-side with context.Canceled and silently
+	// lose rows (notably the only row of a single-query -c=1 run). Detach from
+	// cancellation but keep a bound on how long a write may take. Mirrors the
+	// same defence in finalize().
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+
+	tag, err := w.pool.Exec(wctx,
 		`INSERT INTO raw.gmaps_places
 		     (scrape_id, place_id, content_hash, payload, source_url, http_status, scraped_at)
 		 VALUES ($1, $2, $3, $4, $5, 200, now())
@@ -105,16 +106,20 @@ func (w *PlacegraphWriter) writeOne(ctx context.Context, e *gmaps.Entry) error {
 	return nil
 }
 
-func (w *PlacegraphWriter) finalize() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
+func (w *PlacegraphWriter) finalize(ctx context.Context) {
+	// scrapemate usually cancels the inbound ctx by the time Run() returns,
+	// which would make this UPDATE a silent no-op and leave the scrape_runs
+	// row stuck at status='running'. Finalise on a fresh, short-lived context
+	// so the batch is always closed out. (The pool is still open here: the
+	// deferred pool.Close() runs after this, LIFO.)
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+	}
 	status := "success"
 	if w.hadError.Load() {
 		status = "partial"
-	}
-	if w.count.Load() == 0 && w.hadError.Load() {
-		status = "failed"
 	}
 	_, _ = w.pool.Exec(ctx,
 		`UPDATE raw.scrape_runs
