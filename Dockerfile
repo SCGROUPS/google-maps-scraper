@@ -1,13 +1,15 @@
 # Build stage for Playwright dependencies
 FROM ubuntu:20.04 AS playwright-deps
+
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
-#ENV PLAYWRIGHT_DRIVER_PATH=/opt/
+ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright-go
+
 ARG TARGETARCH
+ARG PLAYWRIGHT_GO_VERSION=v0.6100.0
 
 RUN export PATH=$PATH:/usr/local/go/bin:/root/go/bin \
     && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl wget \
-    # Architektur-Logik für den Go-Download
     && if [ "$TARGETARCH" = "arm64" ]; then \
          GO_ARCH="arm64"; \
        else \
@@ -16,29 +18,41 @@ RUN export PATH=$PATH:/usr/local/go/bin:/root/go/bin \
     && wget -q "https://go.dev/dl/go1.26.3.linux-${GO_ARCH}.tar.gz" \
     && tar -C /usr/local -xzf "go1.26.3.linux-${GO_ARCH}.tar.gz" \
     && rm "go1.26.3.linux-${GO_ARCH}.tar.gz" \
-    # ... (Rest des ursprünglichen RUN-Befehls: Nodejs, Playwright, etc.)
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && go install github.com/playwright-community/playwright-go/cmd/playwright@latest \
+    && go install github.com/mxschmitt/playwright-go/cmd/playwright@${PLAYWRIGHT_GO_VERSION} \
     && mkdir -p /opt/browsers \
     && playwright install chromium --with-deps
 
+
 # Build stage
 FROM golang:1.26.3-trixie AS builder
+
 WORKDIR /app
+
 COPY go.mod go.sum ./
+
+# Required because go.mod uses:
+# replace github.com/gosom/scrapemate => ./third_party/scrapemate
+COPY third_party/scrapemate ./third_party/scrapemate
+
 RUN go mod download
+
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
+
+RUN CGO_ENABLED=0 go build \
+    -ldflags="-w -s" \
+    -o /usr/bin/google-maps-scraper
+
 
 # Final stage
 FROM debian:trixie-slim
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
-ENV PLAYWRIGHT_DRIVER_PATH=/opt
 
-# Install only the necessary dependencies in a single layer
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
+ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright-go
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libnss3 \
@@ -64,7 +78,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=playwright-deps /opt/browsers /opt/browsers
-COPY --from=playwright-deps /root/.cache/ms-playwright-go /opt/ms-playwright-go
+COPY --from=playwright-deps /opt/ms-playwright-go /opt/ms-playwright-go
 
 RUN chmod -R 755 /opt/browsers \
     && chmod -R 755 /opt/ms-playwright-go
