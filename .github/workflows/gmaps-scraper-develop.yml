@@ -69,7 +69,7 @@ jobs:
 
   deploy:
     needs: update-image
-    runs-on: [self-hosted, aiaivn]
+    runs-on: ubuntu-latest
     steps:
       - name: ArgoCD sync & wait
         env:
