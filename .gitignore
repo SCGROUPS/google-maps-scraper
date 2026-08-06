@@ -1,4 +1,5 @@
 cache/
+!third_party/scrapemate/adapters/cache/
 vendor
 bin
 webdata/
