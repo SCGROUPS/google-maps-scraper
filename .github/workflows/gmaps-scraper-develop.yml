@@ -21,7 +21,7 @@ env:
 
 jobs:
   build:
-    runs-on: [self-hosted, aiaivn]
+    runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
