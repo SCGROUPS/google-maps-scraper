@@ -51,7 +51,7 @@ jobs:
     steps:
       - name: Bump tag trong aiaivn-deployment
         env:
-          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          GITOPS_TOKEN_DEV: ${{ secrets.GITOPS_TOKEN_DEV }}
           TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
@@ -59,7 +59,7 @@ jobs:
           git config --global user.name  "Auto Deploy"
           rm -rf gitops
           git clone --depth 1 -b "${GITOPS_BRANCH}" \
-            "https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" gitops
+            "https://x-access-token:${GITOPS_TOKEN_DEV}@github.com/${GITOPS_REPO}.git" gitops
           VALUES="gitops/aiaivn-services/${VALUES_ENV}/${APP_NAME}/values.yaml"
           test -f "$VALUES" || { echo "ERROR: không thấy $VALUES"; exit 1; }
           sed -i -E "/^image:/,/tag:/ s|(tag:).*|\1 \"${TAG}\"|" "$VALUES"
