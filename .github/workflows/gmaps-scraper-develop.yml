@@ -1,0 +1,84 @@
+name: Build & Deploy (develop) google-maps-scraper
+
+on:
+  push:
+    branches: [develop]
+
+concurrency:
+  group: develop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_NAME: google-maps-scraper
+  BUILD_CONTEXT: .
+  DOCKERFILE: Dockerfile.saas
+  REGISTRY: registry.digitalocean.com/doks-staging-registry
+  REGISTRY_NAME: doks-staging-registry
+  VALUES_ENV: develop
+  ARGOCD_APP: staging-google-maps-scraper
+  GITOPS_REPO: SCGROUPS/aiaivn-deployment
+  GITOPS_BRANCH: release
+
+jobs:
+  build:
+    runs-on: [self-hosted, aiaivn]
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag
+        id: meta
+        run: echo "tag=gh-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - name: Login DO registry
+        run: echo "${DO_TOKEN}" | docker login registry.digitalocean.com -u "${DO_TOKEN}" --password-stdin
+        env:
+          DO_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Build & push
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${APP_NAME}"; TAG="${{ steps.meta.outputs.tag }}"
+          docker buildx inspect ci-builder >/dev/null 2>&1 \
+            || docker buildx create --name ci-builder --driver docker-container --use
+          docker buildx use ci-builder
+          docker buildx build --push \
+            --cache-to type=inline \
+            --cache-from "type=registry,ref=${IMAGE}:latest" \
+            -f "${DOCKERFILE}" -t "${IMAGE}:${TAG}" -t "${IMAGE}:latest" "${BUILD_CONTEXT}"
+
+  update-image:
+    needs: build
+    runs-on: [self-hosted, aiaivn]
+    steps:
+      - name: Bump tag trong aiaivn-deployment
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config --global user.email "gitops@aiaivn.vn"
+          git config --global user.name  "Auto Deploy"
+          rm -rf gitops
+          git clone --depth 1 -b "${GITOPS_BRANCH}" \
+            "https://x-access-token:${GITOPS_TOKEN}@github.com/${GITOPS_REPO}.git" gitops
+          VALUES="gitops/aiaivn-services/${VALUES_ENV}/${APP_NAME}/values.yaml"
+          test -f "$VALUES" || { echo "ERROR: không thấy $VALUES"; exit 1; }
+          sed -i -E "/^image:/,/tag:/ s|(tag:).*|\1 \"${TAG}\"|" "$VALUES"
+          cd gitops && git add . \
+            && git commit -m "${APP_NAME} (develop) -> ${TAG}" --allow-empty \
+            && git pull --rebase && git push
+
+  deploy:
+    needs: update-image
+    runs-on: [self-hosted, aiaivn]
+    steps:
+      - name: ArgoCD sync & wait
+        env:
+          ARGOCD_URL:  ${{ secrets.ARGOCD_URL_DEV }}
+          ARGOCD_USER: ${{ secrets.ARGOCD_USER_DEV }}
+          ARGOCD_PASS: ${{ secrets.ARGOCD_PASS_DEV }}
+        run: |
+          set -euo pipefail
+          argocd login "${ARGOCD_URL}" --username "${ARGOCD_USER}" --password "${ARGOCD_PASS}" --grpc-web --skip-test-tls
+          argocd app get  "${ARGOCD_APP}" --server "${ARGOCD_URL}" --hard-refresh
+          argocd app sync "${ARGOCD_APP}" --server "${ARGOCD_URL}" --grpc-web || true
+          argocd app wait "${ARGOCD_APP}" --server "${ARGOCD_URL}" --grpc-web --timeout 180
