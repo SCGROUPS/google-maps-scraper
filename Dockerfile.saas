@@ -8,6 +8,11 @@ RUN apk add --no-cache git ca-certificates
 
 # Copy go mod files
 COPY go.mod go.sum ./
+
+# Required because go.mod uses:
+# replace github.com/gosom/scrapemate => ./third_party/scrapemate
+COPY third_party/scrapemate ./third_party/scrapemate
+
 RUN go mod download
 
 # Copy source code
