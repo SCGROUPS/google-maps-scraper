@@ -11,7 +11,7 @@ concurrency:
 env:
   APP_NAME: google-maps-scraper
   BUILD_CONTEXT: .
-  DOCKERFILE: Dockerfile.saas
+  DOCKERFILE: Dockerfile
   REGISTRY: registry.digitalocean.com/doks-staging-registry
   REGISTRY_NAME: doks-staging-registry
   VALUES_ENV: develop
@@ -21,7 +21,7 @@ env:
 
 jobs:
   build:
-    runs-on: [self-hosted, aiaivn]
+    runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.meta.outputs.tag }}
     steps:
@@ -47,7 +47,7 @@ jobs:
 
   update-image:
     needs: build
-    runs-on: [self-hosted, aiaivn]
+    runs-on: ubuntu-latest
     steps:
       - name: Bump tag trong aiaivn-deployment
         env:
