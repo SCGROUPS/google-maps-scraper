@@ -1,0 +1,17 @@
+# CI of the develop and preprod lanes on GitLab (git.aiaivn.com, mirror of this repository): gitleaks, semgrep, trivy,
+# then a BuildKit build pushed to the DigitalOcean registry as gl-<sha7>. The branch picks the lane: develop -> values
+# develop (ArgoCD staging-google-maps-scraper), preprod and uat/* -> values staging (ArgoCD preprod-google-maps-scraper). Template:
+# devops/gitlab-ci-templates includes/test.yaml.
+#
+# Shadow mode (deploy_when: never): no gitops bump, no ArgoCD sync. GitHub Actions still deploys and bumps
+# aiaivn-deployment, which Auto Sync copies into devops/develop-workload.
+#
+# Build arguments are looked up per lane as <NAME>__DEVELOP / <NAME>__PREPROD, then <NAME> (project CI/CD variables,
+# protected). GitLab mirrors this file from GitHub: it has to live here or the mirror overwrites it.
+include:
+  - project: devops/gitlab-ci-templates
+    ref: main
+    file: /includes/test.yaml
+    inputs:
+      app_name: google-maps-scraper
+      deploy_when: never
