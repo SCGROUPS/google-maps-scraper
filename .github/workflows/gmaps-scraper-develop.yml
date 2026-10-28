@@ -1,8 +1,7 @@
 name: Build & Deploy (develop) google-maps-scraper
 
 on:
-  push:
-    branches: [develop]
+  workflow_dispatch: {}
 
 concurrency:
   group: develop-${{ github.ref }}
